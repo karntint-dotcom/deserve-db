@@ -182,11 +182,16 @@ def make_forecast(vals, months_act, months_fc):
 # ════════════════════════════════════════════════════════════════════════════
 # SHEET 1: ภาพรวมยอดขาย
 # ════════════════════════════════════════════════════════════════════════════
-def build_sheet1(wb, df, grand_total, months):
+def build_sheet1(wb, df, grand_total, months, monthly_targets=None):
     ws = wb.create_sheet("1_ภาพรวมยอดขาย"); ws.sheet_properties.tabColor = "1F4E79"
-    W(ws,1,1,"Deserve Dashboard – ภาพรวมยอดขาย",bg="1F4E79",fg="FFFFFF",b=True,sz=14,h="left",merge_to=6)
+    mt = monthly_targets or {}
+    total_target = sum(mt.values()) if mt else 0
+    overall_ach  = grand_total/total_target if total_target else None
+
+    W(ws,1,1,"Deserve Dashboard – ภาพรวมยอดขาย",bg="1F4E79",fg="FFFFFF",b=True,sz=14,h="left",merge_to=8)
     ws.row_dimensions[1].height = 26
 
+    # KPI row — เพิ่ม Target + % Achievement
     kpis = [("ยอดขายรวม (บาท)", grand_total, '#,##0.00'),
             ("จำนวนรายการ", len(df), '#,##0'),
             ("จำนวนชื่อร้าน", df['ชื่อร้าน'].nunique(), '#,##0'),
@@ -194,32 +199,79 @@ def build_sheet1(wb, df, grand_total, months):
     for i,(lbl,val,fmt) in enumerate(kpis):
         W(ws,3,i+1,lbl,bg="2E75B6",fg="FFFFFF",b=True,sz=9)
         W(ws,4,i+1,val,bg="DEEAF1",b=True,sz=13,fg="1F4E79",fmt=fmt)
+
+    if total_target:
+        W(ws,3,6,"เป้าหมายรวม (บาท)",bg="C00000",fg="FFFFFF",b=True,sz=9)
+        W(ws,4,6,total_target,bg="FCE4D6",b=True,sz=13,fg="C00000",fmt='#,##0')
+        ach_bg = "C6EFCE" if overall_ach>=1 else("FFF2CC" if overall_ach>=0.8 else "FFD7D7")
+        W(ws,3,7,"% Achievement",bg="C00000",fg="FFFFFF",b=True,sz=9)
+        W(ws,4,7,overall_ach,bg=ach_bg,b=True,sz=13,fg="C00000",fmt='0.0%')
+        W(ws,3,8,"Gap (จริง - เป้า)",bg="C00000",fg="FFFFFF",b=True,sz=9)
+        gap = grand_total - total_target
+        W(ws,4,8,gap,bg="E2EFDA" if gap>=0 else "FFD7D7",b=True,sz=12,fg="1F4E79",fmt='+#,##0;-#,##0;0')
+
     ws.row_dimensions[4].height = 26
 
-    for ci,h in enumerate(["เดือน","ยอดขาย (บาท)","% ของยอดรวม","จำนวนร้าน","จำนวนรหัส","เพิ่ม/ลด vs เดือนก่อน"],1):
-        W(ws,6,ci,h,bg="1F4E79",fg="FFFFFF",b=True,sz=9)
-    ws.row_dimensions[6].height = 18
+    # Monthly table headers — เพิ่ม Target, Gap, %Achieve
+    has_target_cols = bool(mt)
+    hdrs = ["เดือน","ยอดขาย (บาท)","% ของยอดรวม","จำนวนร้าน","เพิ่ม/ลด vs เดือนก่อน"]
+    if has_target_cols:
+        hdrs += ["Target (บาท)","Gap","% Achievement"]
+    for ci,h in enumerate(hdrs,1):
+        W(ws,6,ci,h,bg="1F4E79",fg="FFFFFF",b=True,sz=9,wrap=True)
+    ws.row_dimensions[6].height = 28
+
+    # Collect all months (actual + target months)
+    all_months = sorted(set(list(months) + list(mt.keys()))) if mt else months
 
     prev = None
-    for ri,m in enumerate(months,7):
-        mdf = df[df['month']==m]; sales = mdf['ราคารวม'].sum()
-        pct = sales/grand_total if grand_total else 0
-        chg = (sales-prev)/prev if prev else None
-        alt = "F2F2F2" if ri%2==0 else None
-        W(ws,ri,1,MTH[m],bg=alt,b=True)
-        W(ws,ri,2,sales,bg=alt,fmt='#,##0.00')
-        W(ws,ri,3,pct,bg=alt,fmt='0.0%')
-        W(ws,ri,4,mdf['ชื่อร้าน'].nunique(),bg=alt)
-        W(ws,ri,5,mdf['รหัสลูกค้า_norm'].nunique(),bg=alt)
-        if chg is not None:
-            W(ws,ri,6,chg,bg="E2EFDA" if chg>=0 else "FFD7D7",fmt='+0.0%;-0.0%;0.0%')
-        prev = sales
+    for ri,m in enumerate(all_months,7):
+        mdf = df[df['month']==m]
+        sales  = mdf['ราคารวม'].sum()
+        pct    = sales/grand_total if grand_total else 0
+        chg    = (sales-prev)/prev if prev and m in months else None
+        target = mt.get(m)
+        alt    = "F2F2F2" if ri%2==0 else None
+        in_act = m in months
 
-    tr = 7+len(months)
+        W(ws,ri,1,MTH[m],bg=alt,b=True)
+        W(ws,ri,2,sales if in_act else "(ยังไม่มีข้อมูล)",bg=alt,fmt='#,##0.00' if in_act else None,
+          fg="000000" if in_act else "AAAAAA")
+        W(ws,ri,3,pct if in_act else "—",bg=alt,fmt='0.0%' if in_act else None)
+        W(ws,ri,4,mdf['ชื่อร้าน'].nunique() if in_act else "—",bg=alt)
+        if chg is not None:
+            W(ws,ri,5,chg,bg="E2EFDA" if chg>=0 else "FFD7D7",fmt='+0.0%;-0.0%;0.0%')
+        else:
+            W(ws,ri,5,"—",bg=alt,fg="AAAAAA")
+
+        if has_target_cols:
+            W(ws,ri,6,target if target else "—",bg="FCE4D6" if target else alt,
+              fmt='#,##0' if target else None,b=bool(target))
+            if target and in_act:
+                gap = sales-target
+                ach = sales/target
+                gbg = "E2EFDA" if gap>=0 else "FFD7D7"
+                abg = "C6EFCE" if ach>=1 else("FFF2CC" if ach>=0.9 else("FCE4D6" if ach>=0.7 else "FFD7D7"))
+                W(ws,ri,7,gap,bg=gbg,fmt='+#,##0;-#,##0;0',sz=9)
+                W(ws,ri,8,ach,bg=abg,fmt='0.0%',b=True)
+            else:
+                for ci in [7,8]: W(ws,ri,ci,"—",bg=alt,fg="AAAAAA")
+
+        if in_act: prev = sales
+
+    tr = 7+len(all_months)
     W(ws,tr,1,"รวม",bg="BDD7EE",b=True)
     W(ws,tr,2,grand_total,bg="2E75B6",fg="FFFFFF",b=True,fmt='#,##0.00')
     W(ws,tr,3,1.0,bg="BDD7EE",b=True,fmt='0.0%')
-    for i,w_ in enumerate([10,18,14,14,16,20],1): ws.column_dimensions[gc(i)].width=w_
+    if has_target_cols and total_target:
+        W(ws,tr,6,total_target,bg="C00000",fg="FFFFFF",b=True,fmt='#,##0')
+        gap_all = grand_total-total_target
+        W(ws,tr,7,gap_all,bg="E2EFDA" if gap_all>=0 else "FFD7D7",b=True,fmt='+#,##0;-#,##0;0')
+        W(ws,tr,8,overall_ach,bg="C6EFCE" if overall_ach>=1 else("FFF2CC" if overall_ach>=0.8 else "FFD7D7"),
+          b=True,fmt='0.0%')
+
+    widths = [10,18,12,11,18,15,14,14]
+    for i,w_ in enumerate(widths,1): ws.column_dimensions[gc(i)].width=w_
 
 # ════════════════════════════════════════════════════════════════════════════
 # SHEET 2: Ranking ร้านค้า
@@ -934,7 +986,7 @@ def build_dashboard(file_bytes, plc_target=1_250_000, plc_deadline="30 มิถ
 
     wb = Workbook(); wb.remove(wb.active)
 
-    upd(18, "📊 ภาพรวมยอดขาย..."); build_sheet1(wb, df, grand_total, months)
+    upd(18, "📊 ภาพรวมยอดขาย..."); build_sheet1(wb, df, grand_total, months, monthly_targets)
     upd(28, "🏪 Ranking ร้านค้า..."); build_sheet2(wb, df, grand_total, months)
     upd(36, "🔑 Ranking รหัสลูกค้า..."); build_sheet3(wb, df, grand_total, months)
     upd(43, "🌾 ยอดขายฟาร์ม..."); build_sheet4(wb, df, grand_total, months)
